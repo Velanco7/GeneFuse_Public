@@ -1,0 +1,40 @@
+2025-05-22 13:45:12 - GeneFuse - INFO - Initializing GeneFuse pipeline
+2025-05-22 13:45:12 - GeneFuse - DEBUG - Using provided API key
+2025-05-23 00:09:40 - GeneFuse - INFO - Analysis completed successfully
+2025-05-23 00:09:40 - GeneFuse - INFO - Starting comprehensive data analysis
+2025-05-23 00:09:40 - GeneFuse - INFO - Running Rosetta Stone analysis (neighborhood domain analysis)
+2025-05-23 00:09:40 - GeneFuse - INFO - Extracted 35715 protein accessions from neighborhood results
+2025-05-23 00:09:50 - GeneFuse - INFO - Fetched batch 1: 2000 sequences
+2025-05-23 00:10:01 - GeneFuse - INFO - Fetched batch 2: 2000 sequences
+2025-05-23 00:10:02 - GeneFuse - WARNING - Retrying batch 3 (attempt 1)
+2025-05-23 00:10:07 - GeneFuse - WARNING - Retrying batch 3 (attempt 2)
+2025-05-23 00:10:28 - GeneFuse - INFO - Fetched batch 3: 2000 sequences
+2025-05-23 00:10:29 - GeneFuse - WARNING - Retrying batch 4 (attempt 1)
+2025-05-23 00:10:34 - GeneFuse - WARNING - Retrying batch 4 (attempt 2)
+2025-05-23 00:10:55 - GeneFuse - INFO - Fetched batch 4: 2000 sequences
+2025-05-23 00:11:10 - GeneFuse - INFO - Fetched batch 5: 2000 sequences
+2025-05-23 00:11:25 - GeneFuse - INFO - Fetched batch 6: 2000 sequences
+2025-05-23 00:11:39 - GeneFuse - INFO - Fetched batch 7: 2000 sequences
+2025-05-23 00:11:50 - GeneFuse - INFO - Fetched batch 8: 2000 sequences
+2025-05-23 00:11:50 - GeneFuse - WARNING - Retrying batch 9 (attempt 1)
+2025-05-23 00:11:56 - GeneFuse - WARNING - Retrying batch 9 (attempt 2)
+2025-05-23 00:12:16 - GeneFuse - INFO - Fetched batch 9: 2000 sequences
+2025-05-23 00:12:17 - GeneFuse - WARNING - Retrying batch 10 (attempt 1)
+2025-05-23 00:12:32 - GeneFuse - INFO - Fetched batch 10: 2000 sequences
+2025-05-23 00:12:42 - GeneFuse - INFO - Fetched batch 11: 2000 sequences
+2025-05-23 00:12:53 - GeneFuse - INFO - Fetched batch 12: 2000 sequences
+2025-05-23 00:13:07 - GeneFuse - INFO - Fetched batch 13: 2000 sequences
+2025-05-23 00:13:08 - GeneFuse - WARNING - Retrying batch 14 (attempt 1)
+2025-05-23 00:13:28 - GeneFuse - INFO - Fetched batch 14: 2000 sequences
+2025-05-23 00:13:29 - GeneFuse - WARNING - Retrying batch 15 (attempt 1)
+2025-05-23 00:13:44 - GeneFuse - INFO - Fetched batch 15: 2000 sequences
+2025-05-23 00:13:44 - GeneFuse - WARNING - Retrying batch 16 (attempt 1)
+2025-05-23 00:13:50 - GeneFuse - WARNING - Retrying batch 16 (attempt 2)
+2025-05-23 00:14:13 - GeneFuse - INFO - Fetched batch 16: 2000 sequences
+2025-05-23 00:14:32 - GeneFuse - INFO - Fetched batch 17: 2000 sequences
+2025-05-23 00:14:33 - GeneFuse - WARNING - Retrying batch 18 (attempt 1)
+2025-05-23 00:14:38 - GeneFuse - WARNING - Retrying batch 18 (attempt 2)
+2025-05-23 00:15:03 - GeneFuse - INFO - Fetched batch 18: 1715 sequences
+2025-05-23 00:15:03 - GeneFuse - INFO - Running HMMER scans...
+2025-05-23 00:15:03 - GeneFuse - DEBUG - Input FASTA: GeneFuse_PRTase_20250522_134512/Domain_analysis/neighborhood_sequences.fasta
+2025-05-23 00:15:03 - GeneFuse - INFO - Scanning with database: Databases/Pfam/Pfam-A.hmm
