@@ -70,21 +70,24 @@ python Complete_Script_V1.2.1.py \
 ```
 
 🧾 Required Arguments
-Argument	Description
-input_file	FASTA file of your query protein
--u, --user_email	Email address (used with Entrez queries)
--db1, --database_psi	Path to PSI-BLAST database
--db2, --database_hmm	One or more HMMER databases (e.g., Pfam-A.hmm)
+| Argument                 | Description                                    |
+| ------------------------ | ---------------------------------------------- |
+| `input_file`             | FASTA file of your query protein               |
+| `-u`, `--user_email`     | Email address (used with Entrez queries)       |
+| `-db1`, `--database_psi` | Path to PSI-BLAST database                     |
+| `-db2`, `--database_hmm` | One or more HMMER databases (e.g., Pfam-A.hmm) |
+
 
 ⚙️ Optional Arguments
-Argument	Default	Description
--g, --num_genes	5	Number of upstream/downstream genes to extract
--e1, --E_value_psi	0.00001	E-value cutoff for PSI-BLAST
---iterations	3	Number of PSI-BLAST iterations
---num_threads	4	Threads for processing
---api_key	None	Optional Entrez API key
--c, --config	config.ini	Path to configuration file
---identity_threshold	95.0	Minimum percent identity for filtering
+| Argument               | Default    | Description                                    |
+| ---------------------- | ---------- | ---------------------------------------------- |
+| `-g`, `--num_genes`    | 5          | Number of upstream/downstream genes to extract |
+| `-e1`, `--E_value_psi` | 0.00001    | E-value cutoff for PSI-BLAST                   |
+| `--iterations`         | 3          | Number of PSI-BLAST iterations                 |
+| `--num_threads`        | 4          | Threads for processing                         |
+| `--api_key`            | None       | Optional Entrez API key                        |
+| `-c`, `--config`       | config.ini | Path to configuration file                     |
+| `--identity_threshold` | 95.0       | Minimum percent identity for filtering         |
 
 
 > Add flags and input specifications as needed once CLI is implemented.
