@@ -1,6 +1,6 @@
 # 🧬 GeneFuse
 
-**GeneFuse** is a bioinformatics tool under active development that identifies and analyzes potential gene fusion events. The pipeline integrates protein domain analysis, genomic neighborhood exploration, and sequence similarity to help infer the function of uncharacterized proteins or fusion events.
+**GeneFuse** is a bioinformatics tool under active development that identifies and analyses potential gene fusion events. The pipeline integrates protein domain analysis, genomic neighbourhood exploration, and sequence similarity to help infer the function of uncharacterized proteins or fusion events.
 
 > **Status**: In development 🚧  
 > Author: Velanco Fernandes
@@ -9,7 +9,7 @@
 
 ## 🚀 Features
 
-- Genomic neighborhood and protein clustering
+- Genomic neighbourhood and protein clustering
 - Integration of domain information via HMMER and PSI-BLAST
 - Rosetta-style "fusion logic" to flag potential fused proteins
 - Customizable, modular architecture for further expansion
