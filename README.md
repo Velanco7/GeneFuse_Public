@@ -45,6 +45,18 @@
    ```bash
    pip install -r requirements.txt
    ```
+External Tools
+The following external tools are not Python packages and must be installed separately on your system:
+
+BLAST+:
+Download and install from NCBI BLAST executables
+
+HMMER (hmmscan):
+Download and install from HMMER official site
+
+Databases:
+RefSeq protein database and Pfam HMM databases are data files that need to be downloaded independently. Make sure to provide the correct paths to these files when running GeneFuse.
+
 
 ---
 
