@@ -1,0 +1,6 @@
+biopython>=1.79
+pandas>=1.0
+requests
+openpyxl
+lxml
+bcbio-gff
