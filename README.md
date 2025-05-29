@@ -45,7 +45,7 @@
    ```bash
    pip install -r requirements.txt
    ```
-## External Tools
+# External Tools
 
 The following external tools are not Python packages and must be installed separately on your system:
 
