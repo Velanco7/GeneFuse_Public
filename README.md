@@ -3,7 +3,7 @@
 **GeneFuse** is a bioinformatics tool under active development that identifies and analyses potential gene fusion events. The pipeline integrates protein domain analysis, genomic neighbourhood exploration, and sequence similarity to help infer the function of uncharacterized proteins or fusion events.
 
 > **Status**: In development 🚧  
-> **Author**: Velanco Fernandes
+> **Author**: Velanco Fernandes   
 > **License** This project is licensed under the GNU General Public License v3 (GPLv3). See [LICENSE.txt](LICENSE.txt) for details.  
 
 ---
