@@ -4,6 +4,8 @@
 
 > **Status**: In development 🚧  
 > Author: Velanco Fernandes
+> ## License  
+This project is licensed under the GNU General Public License v3 (GPLv3). See [LICENSE.txt](LICENSE.txt) for details.  
 
 ---
 
