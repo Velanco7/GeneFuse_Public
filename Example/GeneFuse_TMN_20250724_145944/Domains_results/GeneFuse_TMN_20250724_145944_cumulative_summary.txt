@@ -1,0 +1,67 @@
+Target Name	Accession	Description	Occurrences
+YobI-ATPase	PF20693.3	YobI-like P-loop NTPase	5267
+AAA_16	PF13191.12	AAA ATPase domain	1390
+KAP_NTPase	PF07693.20	KAP family P-loop domain	931
+PRK	PF00485.24	Phosphoribulokinase / Uridine kinase family	5
+AAA_14	PF13173.12	AAA domain	163
+TniB	PF05621.17	Bacterial TniB protein	187
+AAA_22	PF13401.12	AAA domain	1012
+AAA_29	PF13555.12	P-loop containing region of AAA domain	201
+AAA_18	PF13238.12	AAA domain	30
+AAA	PF00004.35	ATPase family associated with various cellular activities (AAA)	582
+nSTAND3	PF20720.3	Novel STAND NTPase 3	3
+AAA_5	PF07728.20	AAA domain (dynein-related subfamily)	16
+ATPase_2	PF01637.24	ATPase domain predominantly from Archaea	8
+COG4_m	PF08318.18	COG4 transport protein, middle alpha-helical bundle	1
+DUF815	PF05673.19	Protein of unknown function (DUF815)	34
+AAA_7	PF12775.13	P-loop containing dynein motor region	22
+ABC_tran	PF00005.33	ABC transporter	38
+DUF503	PF04456.17	Protein of unknown function (DUF503)	1
+DUF4140	PF13600.11	N-terminal domain of unknown function (DUF4140)	5
+Dynamin_N	PF00350.29	Dynamin family	11
+CPT	PF07931.18	Chloramphenicol phosphotransferase-like protein	1
+Guanylate_kin	PF00625.27	Guanylate kinase	1
+DUF1664	PF07889.17	Protein of unknown function (DUF1664)	1
+AAA_21	PF13304.12	AAA domain, putative AbiEii toxin, Type IV TA system	1
+UvrD-helicase	PF00580.27	UvrD/REP helicase N-terminal domain	1
+SUR7	PF06687.17	SUR7/PalI family	6
+ATG17_like	PF04108.17	Autophagy protein ATG17-like domain	2
+PKcGMP_CC	PF16808.10	Coiled-coil N-terminus of cGMP-dependent protein kinase	1
+SF-assemblin	PF06705.16	SF-assemblin/beta giardin	10
+DUF6535	PF20153.4	Family of unknown function (DUF6535)	1
+DUF7578	PF24466.1	Domain of unknown function (DUF7578)	2
+DUF2175	PF09943.14	Uncharacterized protein conserved in archaea (DUF2175)	1
+T2SSE	PF00437.26	Type II/IV secretion system protein	2
+DUF5380	PF17351.7	Family of unknown function (DUF5380)	1
+FtsK_SpoIIIE	PF01580.24	FtsK/SpoIIIE family	1
+RsgA_GTPase	PF03193.22	RsgA GTPase	9
+U3_assoc_6	PF08640.17	U3 small nucleolar RNA-associated protein 6	1
+Yip1	PF04893.22	Yip1 domain	2
+DUF4052	PF13261.11	Protein of unknown function (DUF4052)	1
+AAA_19	PF13245.12	AAA domain	5
+Rep_OBD	PF01719.23	Plasmid replication protein, origin binding domain	1
+EII-Sor	PF03609.19	PTS system sorbose-specific iic component	1
+Knl1_RWD_C	PF18210.6	Knl1 RWD C-terminal domain	1
+JetA	PF18982.5	Wadjet protein JetA	2
+cobW	PF02492.25	CobW/HypB/UreG, nucleotide-binding domain	12
+DUF2207_C	PF20990.2	Predicted membrane protein (DUF2207) C-terminal domain	5
+Osmo_CC	PF08946.15	Osmosensory transporter coiled coil	1
+AAA_28	PF13521.12	AAA domain	18
+MotA_ExbB	PF01618.21	MotA/TolQ/ExbB proton channel family	1
+Sensor	PF13796.11	Putative sensor	1
+DUF3382	PF11862.13	Domain of unknown function (DUF3382)	1
+AAA_30	PF13604.12	AAA domain	1
+DUF3671	PF12420.13	Fam-L, Fam-M like protein	1
+PHM7_cyt	PF14703.12	Cytosolic domain of 10TM putative phosphate transporter	1
+DUF5671	PF18920.5	Domain of unknown function (DUF5671)	1
+CoV_NSP6	PF19213.5	Coronavirus replicase NSP6	2
+Baculo_VP91_N	PF08475.15	Viral capsid protein 91 N-terminal	2
+G-alpha	PF00503.26	G-protein alpha subunit	8
+Retrotran_gag_3	PF14244.12	gag-polypeptide of LTR copia-type	1
+Knl-2-like_dom	PF21506.2	Kinetochore null protein 2-like domain	1
+Roc	PF08477.19	Ras of Complex, Roc, domain of DAPkinase	1
+EXS	PF03124.20	EXS family	1
+NiFe_hyd_SSU_C	PF14720.11	NiFe/NiFeSe hydrogenase small subunit C-terminal	5
+IIGP	PF05049.19	Interferon-inducible GTPase (IIGP)	1
+
+Total Sequences Processed: 5930
