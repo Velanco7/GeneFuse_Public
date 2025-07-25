@@ -1,6 +1,6 @@
 # 🧬 GeneFuse
 
-**GeneFuse** is a bioinformatics tool that identifies and analyses potential gene fusion events. The pipeline integrates protein domain analysis, genomic neighbourhood exploration, and sequence similarity to help infer the function of uncharacterized proteins or fusion events.
+**GeneFuse** is a bioinformatics tool (currently optimised for Linux) that identifies and analyses potential gene fusion events. The pipeline integrates protein domain analysis, genomic neighbourhood exploration, and sequence similarity to help infer the function of uncharacterized proteins or fusion events.
 
 > **Version**: 1.3.6  
 > **Author**: Velanco Fernandes   
@@ -39,7 +39,7 @@
 2. (Optional) Create a virtual environment:
    ```bash
    python -m venv env
-   source env/bin/activate  # or env\Scripts\activate on Windows
+   source env/bin/activate
    ```
 
 3. Install dependencies:
@@ -110,20 +110,23 @@ python Complete_Script_V1.2.1.py \
 
 ## ✅ To-Do
 
-- [ ] Integrate `Complete_rosetta.py` fully into a class/module structure
+- [ ] Improve the Data Analyser class with further clustering, and matching of the final.csv and reintroduced.csv
 - [ ] Add CLI support using `argparse` or `typer`
-- [ ] Add test dataset and output examples
 - [ ] Write unit tests
 - [ ] Add Docker support
 
----
-
-## 📄 License
-
-To be added (suggested: MIT or GPL).
 
 ---
 
-## 🤝 Contributions
 
-This project is personal, but collaborators with relevant bioinformatics experience are welcome to fork, suggest features, or raise issues.
+##🤝 Contributions
+This is a personal research tool, but contributions are welcome — particularly from those with experience in:
+
+- Protein domain analysis
+- Comparative genomics
+- Functional annotation pipelines
+- Python and bioinformatics tooling
+
+Feel free to fork the repository, open issues, or suggest improvements!
+
+
