@@ -28,6 +28,25 @@
 
 ---
 
+##📂 Example Datasets
+
+We include two real-world analyses to help you get started:
+
+-GeneFuse_PRTase_20250522_134512
+   Focus: Phosphoribosyltransferase (PRTase) gene neighbourhood analysis
+   Method: Uses legacy complete_rosetta.py (deprecated standalone script)
+   Use Case: Demonstrates early pipeline capabilities (retained for archival purposes)
+
+-GeneFuse_TMN_20250724_145944
+   Focus: Transcriptional regulator (TMN family) fusion detection
+   Method: Uses modern DataAnalyser class (fully integrated in complete_script_V1.3.6.py)
+   Key Improvements:  
+      Unified error handling
+      Optimised clustering algorithms
+      Automated report generation
+
+---
+
 ## 🛠️ Installation
 
 1. Clone the repository:
