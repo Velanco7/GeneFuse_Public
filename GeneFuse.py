@@ -2,7 +2,9 @@
 """
 GeneFuse: Advanced Genomic Neighborhood and Domain Analysis Pipeline
 
-Personal Project
+Version: 1.3.6
+
+copyright  = "GNU General Public License v3.0"
 
 Author: Velanco Fernandes
 Email: Velancofernandes7@googlemail.com
@@ -28,7 +30,7 @@ import glob
 from datetime import datetime
 from Bio import Entrez, SeqIO
 from Bio.Blast import NCBIXML
-from collections import Counter, defaultdict
+from collections import deque, Counter, defaultdict
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from openpyxl import Workbook
@@ -55,7 +57,6 @@ DEFAULT_CONFIG = {
         'domain_e_value_threshold': '0.001'
     }
 }
-
 # Add these new constants for NCBI operations
 BATCH_SIZE = 2000  # Number of sequences to fetch in each batch
 DELAY = 0.34       # Delay between NCBI requests (seconds)
@@ -217,6 +218,7 @@ def network_required(func):
                 network_mgr.wait_for_connection()
     return wrapper
 
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="GeneFuse: gene fusion detection tool")
     parser.add_argument("input_file", help="Input FASTA file containing query sequence")
@@ -227,7 +229,7 @@ def parse_arguments():
     parser.add_argument("-db1", "--database_psi", required=True, help="Database to be used for psiblast search")
     parser.add_argument("-db2", "--database_hmm", required=True, help="HMM databases (e.g., Pfam-A.hmm)", nargs="+")
     parser.add_argument("-g", "--num_genes", help="Number of upstream and downstream genes to extract (default: 5)", default=5, type=int)
-    parser.add_argument("-num_threads", help="Number of threads (default: 4)", default=4, type=int)
+    parser.add_argument("-t", "--num_threads", help="Number of threads (default: 4)", default=4, type=int)
     parser.add_argument("-api_key", help="Entrez api key (optional)")
     parser.add_argument('--identity_threshold', type=float, default=95.0,
                       help="Minimum percent identity for filtering (default: 95)")
@@ -250,7 +252,8 @@ def output_directory_initialisation(input_name, config):
         'neighborhoods': os.path.join(output_dir, "Neighborhoods_results"),
         'domains': os.path.join(output_dir, "Domains_results"),
         'temp': os.path.join(output_dir, "Temp_files"),
-        'domain_analysis': os.path.join(output_dir, "Domain_analysis")
+        #'domain_analysis': os.path.join(output_dir, "Domain_analysis"),
+        'Sequence_analysis': os.path.join(output_dir, "Sequence_analysis")
     }
     
     for path in subdirs.values():
@@ -261,6 +264,7 @@ def output_directory_initialisation(input_name, config):
     shutil.copy2(input_name, input_copy_path)
 
     return output_dir, subdirs
+
 
 def run_psiblast(sequence_file, E_value, iterations, database, output_file, num_threads, PSSM_file, logger):
     """
@@ -692,9 +696,10 @@ def load_assembly_summary(file_path, logger=None):
         raise
 
 @network_required
-def get_assembly_from_protein(protein_id, logger=None):
+def get_assembly_from_protein(protein_id, logger=None, batch_size=100):
     """
     Retrieve assembly accessions associated with a given protein ID using NCBI Entrez API.
+    Now includes batched nuccore → assembly UID mapping for efficiency.
     """
     try:
         if logger:
@@ -720,26 +725,30 @@ def get_assembly_from_protein(protein_id, logger=None):
         if logger:
             logger.log(f"Found nucleotide IDs for protein ID {protein_id}: {nucl_ids}", "debug")
 
+        # NEW: Batch nuccore → assembly UID
         assembly_uids = set()
-        for nucl_id in nucl_ids:
+        for i in range(0, len(nucl_ids), batch_size):
+            batch = nucl_ids[i:i + batch_size]
             try:
                 if logger:
-                    logger.log(f"Fetching assembly links for nucleotide ID: {nucl_id}", "debug")
+                    logger.log(f"Fetching assembly links for nucleotide ID batch {i // batch_size + 1}", "debug")
 
-                handle = Entrez.elink(dbfrom="nuccore", id=nucl_id, db="assembly", retmode="xml")
+                handle = Entrez.elink(dbfrom="nuccore", id=",".join(batch), db="assembly", retmode="xml")
                 raw_xml = handle.read()
                 handle.close()
 
                 root = etree.fromstring(raw_xml)
-                for link_set_db in root.xpath(".//LinkSetDb[DbTo='assembly']"):
-                    for link in link_set_db.xpath(".//Link"):
-                        assembly_uid = link.findtext("Id")
-                        if assembly_uid:
-                            assembly_uids.add(assembly_uid)
+                for link_set in root.xpath(".//LinkSet"):
+                    for link in link_set.xpath(".//LinkSetDb[DbTo='assembly']/Link"):
+                        uid = link.findtext("Id")
+                        if uid:
+                            assembly_uids.add(uid)
+
+                time.sleep(DELAY)
 
             except Exception as e:
                 if logger:
-                    logger.log(f"Error processing nucleotide ID {nucl_id}: {e}", "warning")
+                    logger.log(f"Error in batch nuccore → assembly step: {e}", "warning")
                 continue
 
         if not assembly_uids:
@@ -761,9 +770,9 @@ def get_assembly_from_protein(protein_id, logger=None):
 
             root = etree.fromstring(raw_xml)
             for doc in root.xpath(".//DocumentSummary"):
-                assembly_accession = doc.findtext("AssemblyAccession")
-                if assembly_accession:
-                    assembly_accessions.add(assembly_accession)
+                accession = doc.findtext("AssemblyAccession")
+                if accession:
+                    assembly_accessions.add(accession)
 
         except Exception as e:
             if logger:
@@ -977,7 +986,8 @@ def find_neighboring_proteins(gff_file, target_protein_id, num_genes, logger=Non
 def process_csv_files(csv_dir, output_dir, logger=None):
     """
     Process all .csv files in the given directory to extract protein IDs and descriptions,
-    create cumulative frequency tables for each .csv file, and generate a combined cumulative file.
+    create cumulative frequency tables for each .csv file (optimized with pandas),
+    and generate a combined cumulative file and grouped description file (unchanged).
     """
     try:
         if logger:
@@ -993,56 +1003,55 @@ def process_csv_files(csv_dir, output_dir, logger=None):
         for csv_file in os.listdir(csv_dir):
             if not csv_file.endswith(".csv"):
                 continue
-                
+
             csv_file_path = os.path.join(csv_dir, csv_file)
             cumulative_freq = {}
 
             if logger:
                 logger.log(f"Processing file: {csv_file}", "debug")
 
-            with open(csv_file_path, "r") as file:
-                reader = csv.reader(file)
-                header = next(reader)
+            try:
+                df = pd.read_csv(csv_file_path)
+                if df.shape[1] < 7:
+                    if logger:
+                        logger.log(f"Skipping {csv_file}: not enough columns", "warning")
+                    continue
 
-                for row_number, row in enumerate(reader, start=2):
-                    try:
-                        if len(row) < 7:
-                            if logger:
-                                logger.log(f"Skipping row {row_number}: insufficient columns", "warning")
-                            continue
+                for _, row in df.iterrows():
+                    protein_id = row.iloc[5] if pd.notna(row.iloc[5]) else "Unknown"
+                    description = row.iloc[6] if pd.notna(row.iloc[6]) else "Unknown"
 
-                        protein_id = row[5]
-                        description = row[6]
+                    if protein_id != "Unknown":
+                        cumulative_freq[protein_id] = cumulative_freq.get(protein_id, 0) + 1
+                        combined_cumulative_freq[protein_id] = combined_cumulative_freq.get(protein_id, 0) + 1
 
-                        if protein_id != "Unknown":
-                            cumulative_freq[protein_id] = cumulative_freq.get(protein_id, 0) + 1
-                            combined_cumulative_freq[protein_id] = combined_cumulative_freq.get(protein_id, 0) + 1
+                    if description != "Unknown":
+                        if description.lower() == "hypothetical protein":
+                            if protein_id not in hypothetical_protein_groups:
+                                hypothetical_protein_groups[protein_id] = []
+                            hypothetical_protein_groups[protein_id].append((protein_id, description))
+                        else:
+                            if description not in description_groups:
+                                description_groups[description] = {}
+                            description_groups[description][protein_id] = description_groups[description].get(protein_id, 0) + 1
 
-                        if description != "Unknown":
-                            if description.lower() == "hypothetical protein":
-                                if protein_id not in hypothetical_protein_groups:
-                                    hypothetical_protein_groups[protein_id] = []
-                                hypothetical_protein_groups[protein_id].append((protein_id, description))
-                            else:
-                                if description not in description_groups:
-                                    description_groups[description] = {}
-                                description_groups[description][protein_id] = description_groups[description].get(protein_id, 0) + 1
+                # ✅ Optimized cumulative file generation (per-protein)
+                cumulative_file_path = os.path.join(txt_files_dir, f"{os.path.splitext(csv_file)[0]}_cumulative.txt")
+                with open(cumulative_file_path, "w") as file:
+                    file.write("Protein ID\tFrequency\tDescription\n")
+                    for protein_id, frequency in sorted(cumulative_freq.items(), key=lambda x: x[1], reverse=True):
+                        subset = df[df.iloc[:, 5] == protein_id]
+                        description = subset.iloc[0, 6] if not subset.empty else "Unknown"
+                        file.write(f"{protein_id}\t{frequency}\t{description}\n")
 
-                    except Exception as e:
-                        if logger:
-                            logger.log(f"Error processing row {row_number}: {e}", "error")
-                        continue
+                if logger:
+                    logger.log(f"Saved cumulative file: {cumulative_file_path}", "debug")
 
-            cumulative_file_path = os.path.join(txt_files_dir, f"{os.path.splitext(csv_file)[0]}_cumulative.txt")
-            with open(cumulative_file_path, "w") as file:
-                file.write("Protein ID\tFrequency\tDescription\n")
-                for protein_id, frequency in sorted(cumulative_freq.items(), key=lambda x: x[1], reverse=True):
-                    description = next((row[6] for row in csv.reader(open(csv_file_path)) if len(row) > 6 and row[5] == protein_id), "Unknown")
-                    file.write(f"{protein_id}\t{frequency}\t{description}\n")
-                    
-            if logger:
-                logger.log(f"Saved cumulative file: {cumulative_file_path}", "debug")
+            except Exception as e:
+                if logger:
+                    logger.log(f"Failed to process {csv_file}: {e}", "error")
 
+        # ✅ Unchanged combined_cumulative.txt
         combined_cumulative_file_path = os.path.join(txt_files_dir, "combined_cumulative.txt")
         with open(combined_cumulative_file_path, "w") as file:
             file.write("Protein ID\tFrequency\tDescription\n")
@@ -1054,6 +1063,7 @@ def process_csv_files(csv_dir, output_dir, logger=None):
         if logger:
             logger.log(f"Saved combined cumulative file: {combined_cumulative_file_path}", "info")
 
+        # ✅ Unchanged grouped_by_description.txt
         grouped_file_path = os.path.join(txt_files_dir, "grouped_by_description.txt")
         with open(grouped_file_path, "w") as file:
             file.write("Most Frequent Protein ID\tFrequency\tDescription\n")
@@ -1082,12 +1092,12 @@ def process_csv_files(csv_dir, output_dir, logger=None):
                 
         if logger:
             logger.log(f"Saved grouped results: {grouped_file_path}", "info")
-            
+
     except Exception as e:
         if logger:
             logger.log(f"Error processing CSV files: {str(e)}", "error")
         raise
-
+    
 def domain_analysis(args, output_dir, psi_output_file, domains_sub_dir, logger):
     try:
         logger.log("Starting domain analysis", "info")
@@ -1121,8 +1131,8 @@ def neighborhood_analysis(args, output_dir, psi_id_output_file, hoods_sub_dir, n
     try:
         logger.log("Starting neighborhood analysis", "info")
 
-        domain_analysis_dir = os.path.join(output_dir, "Domain_analysis")
-        os.makedirs(domain_analysis_dir, exist_ok=True)
+        #domain_analysis_dir = os.path.join(output_dir, "Domain_analysis")
+        #os.makedirs(domain_analysis_dir, exist_ok=True)
 
         gff_dir = os.path.join(hoods_sub_dir, "gff_files")
         csv_dir = os.path.join(hoods_sub_dir, "csv_files")
@@ -1235,274 +1245,11 @@ def neighborhood_analysis(args, output_dir, psi_id_output_file, hoods_sub_dir, n
         logger.log(f"Neighborhood analysis failed: {str(e)}", "error")
         raise
 
-def read_protein_ids(filepath, filter_file=None, logger=None):
-    """Extract Protein IDs from the input file, optionally filtering against another file."""
-    try:
-        protein_ids = set()
-        filter_ids = set()
-        
-        if filter_file:
-            logger.log("Reading filter file...", "info")
-            with open(filter_file, 'r') as f:
-                filter_ids = {line.strip() + ".1" for line in f if line.strip()}
-            logger.log(f"Total protein IDs in filter file (with '.1' appended): {len(filter_ids)}", "info")
-        
-        with open(filepath, 'r') as file:
-            next(file)
-            for line in file:
-                if line.strip() == "":
-                    continue
-                parts = line.strip().split('\t')
-                if parts and parts[0] not in filter_ids:
-                    protein_ids.add(parts[0])
-        return list(protein_ids)
-
-    except Exception as e:
-        logger.log(f"Neighbourhood proteins filtering failed: {str(e)}", "error")
-        raise
-
-@network_required
-def fetch_sequences(protein_ids, output_fasta, logger):
-    """Fetch sequences in batches via Entrez."""
-    try:
-        with open(output_fasta, 'w') as fasta_out:
-            for i in range(0, len(protein_ids), BATCH_SIZE):
-                batch = protein_ids[i:i + BATCH_SIZE]
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        handle = Entrez.efetch(
-                            db='protein', id=','.join(batch),
-                            rettype='fasta', retmode='text'
-                        )   
-                        records = list(SeqIO.parse(handle, 'fasta'))
-                        SeqIO.write(records, fasta_out, 'fasta')
-                        logger.log(f"✅ Batch {i//BATCH_SIZE + 1}: {len(records)} sequences fetched", "info")
-                        handle.close()
-                        break
-                    except Exception as e:
-                        if attempt == max_retries - 1:
-                            print(f"❌ Failed batch {i//BATCH_SIZE + 1} after {max_retries} attempts: {e}")
-                        else:
-                            print(f"⚠️ Retrying batch {i//BATCH_SIZE + 1} (attempt {attempt + 1})...")
-                            sleep(DELAY * 2)
-                sleep(DELAY)
-
-    except Exception as e:
-        logger.log(f"Error while fetching neighbourhood protein sequences: {str(e)}", "error")
-        raise
-
-def run_makeblastdb(fasta_file, db_name, logger):
-    """Build BLAST database using makeblastdb."""
-    cmd = [
-        'makeblastdb',
-        '-in', fasta_file,
-        '-dbtype', 'prot',
-        '-out', db_name,
-        '-parse_seqids'
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        logger.log(f"✅ BLAST database '{db_name}' created successfully!", "info")
-    except subprocess.CalledProcessError as e:
-        logger.log(f"❌ makeblastdb failed: {e}", "error")
-
-def run_blastp(query_fasta, db_name, output_csv, threads, logger):
-    """Run all-vs-all BLASTP with the original format 6 output plus headers."""
-    headers = [
-        'qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen',
-        'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore'
-    ]
-    
-    cmd = [
-        'blastp',
-        '-query', query_fasta,
-        '-db', db_name,
-        '-out', output_csv,
-        '-outfmt', '6',
-        '-evalue', '1e-5',
-        '-num_threads', str(threads),
-        '-max_hsps', '1'
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        
-        with open(output_csv, 'r+') as f:
-            content = f.read()
-            f.seek(0, 0)
-            f.write('\t'.join(headers) + '\n' + content)
-        logger.log(f"✅ BLASTP results saved to {output_csv}", "info")
-    except subprocess.CalledProcessError as e:
-        logger.log(f"❌ blastp failed: {e}", "error")
-
-def filter_high_identity_pairs(input_csv, output_csv, threshold, logger):
-    """
-    Filter BLAST results for high identity matches.
-    """
-    try:
-        best_matches = defaultdict(float)
-        
-        with open(input_csv, 'r') as infile:
-            reader = csv.DictReader(infile, delimiter='\t')
-            for row in reader:
-                qseqid = row['qseqid']
-                sseqid = row['sseqid']
-                pident = float(row['pident'])
-                
-                if qseqid == sseqid:
-                    continue
-                
-                pair = tuple(sorted((qseqid, sseqid)))
-                
-                if pident > best_matches[pair]:
-                    best_matches[pair] = pident
-        
-        with open(output_csv, 'w') as outfile:
-            writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(['Protein1', 'Protein2', 'Percent_Identity'])
-            
-            for (prot1, prot2), pident in best_matches.items():
-                if pident >= threshold:
-                    writer.writerow([prot1, prot2, pident])
-        
-        logger.log(f"✅ Filtered high-identity pairs saved to {output_csv}", "info")
-
-    except Exception as e:
-        logger.log(f"Error filtering high identity pairs: {str(e)}", "error")
-        raise
-
-def find_protein_clusters(input_file, output_file, min_identity, logger):
-    """
-    Groups interconnected proteins into clusters based on similarity relationships.
-    """
-    try:
-        graph = defaultdict(set)
-        
-        with open(input_file, 'r') as f:
-            reader = csv.DictReader(f, delimiter='\t')
-            for row in reader:
-                if float(row['Percent_Identity']) >= min_identity:
-                    prot1 = row['Protein1']
-                    prot2 = row['Protein2']
-                    graph[prot1].add(prot2)
-                    graph[prot2].add(prot1)
-        
-        visited = set()
-        clusters = []
-        
-        for protein in graph:
-            if protein not in visited:
-                cluster = set()
-                stack = [protein]
-                
-                while stack:
-                    current = stack.pop()
-                    if current not in visited:
-                        visited.add(current)
-                        cluster.add(current)
-                        stack.extend(graph[current] - visited)
-                
-                if cluster:
-                    clusters.append(cluster)
-        
-        with open(output_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['ClusterID', 'Proteins'])
-            
-            for i, cluster in enumerate(sorted(clusters, key=lambda x: -len(x)), 1):
-                sorted_proteins = sorted(cluster)
-                quoted_proteins = [f'{prot}' for prot in sorted_proteins]
-                writer.writerow([f'Cluster_{i}', ', '.join(quoted_proteins)])
-        
-        logger.log(f"✅ Found {len(clusters)} protein clusters saved to {output_file}", "info")
-
-    except Exception as e:
-        logger.log(f"Protein Clustering failed: {str(e)}", "error")
-        raise
-
-def filter_fasta_by_clusters(cluster_csv, input_fasta, output_fasta, logger):
-    """
-    Remove proteins that appear after the first protein in each cluster.
-    """
-    proteins_to_remove = set()
-    
-    with open(cluster_csv, 'r') as f:
-        reader = csv.reader(f)
-        next(reader)
-        for row in reader:
-            proteins = [p.strip('" ') for p in row[1].split(',')]
-            proteins_to_remove.update(proteins[1:])
-    
-    logger.log(f"Found {len(proteins_to_remove)} proteins to remove from clusters", "debug")
-    
-    kept_records = []
-    removed_count = 0
-    
-    for record in SeqIO.parse(input_fasta, "fasta"):
-        if record.id in proteins_to_remove:
-            removed_count += 1
-        else:
-            kept_records.append(record)
-    
-    with open(output_fasta, 'w') as f:
-        SeqIO.write(kept_records, f, "fasta")
-    
-    logger.log(f"Removed {removed_count} proteins", "debug")
-    logger.log(f"Kept {len(kept_records)} proteins in {output_fasta}","info")
-    logger.log(f"Total proteins to remove that weren't found: {len(proteins_to_remove) - removed_count}", "warning")
-
-def compare_hmm_accessions_with_description(psi_summary_path, neighbourhood_summary_path, output_dir, logger):
-    """Compare two summary files and print common HMM profile accessions with their descriptions."""
-    def extract_hmm_accession_description(filepath):
-        accession_to_description = {}
-        with open(filepath, 'r') as f:
-            for line in f:
-                if line.startswith("Target Name") or not line.strip():
-                    continue
-                parts = line.strip().split('\t')
-                if len(parts) >= 8:
-                    hmm_accession_raw = parts[1]
-                    hmm_accession = hmm_accession_raw.split('.')[0]
-                    description = parts[7].strip()
-                    if hmm_accession not in accession_to_description:
-                        accession_to_description[hmm_accession] = description
-        return accession_to_description
-
-    psi_data = extract_hmm_accession_description(psi_summary_path)
-    neighbourhood_data = extract_hmm_accession_description(neighbourhood_summary_path)
-
-    common_hmm_accessions = set(psi_data.keys()) & set(neighbourhood_data.keys())
-    output_file = os.path.join(output_dir, 'common_hmm_accessions.txt')
-
-    if not common_hmm_accessions:
-        logger.log("No common HMM accessions found", "info")
-        return False
-    
-    logger.log(f"Found {len(common_hmm_accessions)} common HMM accessions", "info")
-    with open(output_file, 'w') as f_out:
-        f_out.write("Common HMM accessions and their descriptions:\n\n")
-        f_out.write("Accession\tDescription\n")
-        f_out.write("----------------------------\n")
-
-        for acc in sorted(common_hmm_accessions):
-            description = psi_data.get(acc) or neighbourhood_data.get(acc)
-            line = f"{acc}\t{description}"
-            logger.log(line, "debug")
-            f_out.write(line + "\n")
-    
-    logger.log(f"Results saved to: {output_file}", "info")
-    return True
-
-def delete_blastdb_files(db_name, logger):
-    """Delete files created by makeblastdb."""
-    extensions = ['.pin', '.phr', '.psq', '.pdb', '.pjs', '.pog', '.pos', '.pto', '.pot', '.ptf']
-    for ext in extensions:
-        file_path = f"{db_name}{ext}"
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.log(f"🗑️ Deleted {file_path}", "info")
-        else:
-            logger.log(f"⚠️ File not found: {file_path}", "cyan")
+def normalize_blast_id(protein_id):
+        """Handle both simple and NCBI-style IDs"""
+        if protein_id.startswith('ref|'):
+            return protein_id.split('|')[1]  # Extract WP_... from ref|WP_...|
+        return protein_id  # Already in simple format
 
 class GeneFusePipeline:
     def __init__(self, args): #! <<<
@@ -1628,34 +1375,30 @@ class DataAnalyser:
         self.logger = logger
         
         # Constants
-        self.BATCH_SIZE = 2000
+        self.BATCH_SIZE = 500
         self.DELAY = 0.34  # NCBI recommended delay
         
         # Setup directories
-        self.domain_analysis_dir = os.path.join(output_dir, "Domain_analysis")
-        self.common_hmm_dir = os.path.join(self.domain_analysis_dir, "Common_HMMs")
-        self.matches_dir = os.path.join(self.common_hmm_dir, "matches")
+        self.sequence_analysis_dir = subdirs['Sequence_analysis']
+        self.clusters_dir = os.path.join(self.sequence_analysis_dir, "clusters")
+        self.csv_dir = os.path.join(subdirs['neighborhoods'], "csv_files")
         
-        os.makedirs(self.domain_analysis_dir, exist_ok=True)
-        os.makedirs(self.common_hmm_dir, exist_ok=True)
-        os.makedirs(self.matches_dir, exist_ok=True)
+        os.makedirs(self.sequence_analysis_dir, exist_ok=True)
+        os.makedirs(self.clusters_dir, exist_ok=True)
 
     def run_analysis(self):
         """Execute the complete analysis workflow"""
         try:
             self.logger.log("Starting comprehensive data analysis", "info")
             
-            # Step 1: Run Rosetta Stone analysis (neighborhood domain analysis)
-            self._run_rosetta_stone_analysis()
+            # Step 1: Run sequence homology analysis
+            self._run_sequence_homology_analysis()
             
-            # Step 2: Compare HMM accessions between PSI and neighborhood results
-            self._compare_hmm_accessions()
+            # Step 2: Run clustering on the results
+            self._run_clustering_analysis()
             
-            # Step 3: Run BLAST analysis on common HMMs
-            self._run_common_hmm_blast()
-            
-            # Step 4: Analyze matches between PSI and neighborhood proteins
-            self._analyze_matches()
+            # Step 3: Run neighborhood CSV analysis
+            self._run_neighborhood_csv_analysis()
             
             self.logger.log("Data analysis completed successfully", "info")
             return True
@@ -1664,409 +1407,627 @@ class DataAnalyser:
             self.logger.log(f"Data analysis failed: {str(e)}", "error")
             raise
 
-    def _run_rosetta_stone_analysis(self):
-        """Run the equivalent of rosetta_stone.py"""
+    def _run_neighborhood_csv_analysis(self):
+        """Analyze neighborhood CSV files to find protein clusters"""
         try:
-            self.logger.log("Running Rosetta Stone analysis (neighborhood domain analysis)", "info")
+            self.logger.log("Starting neighborhood CSV analysis", "info")
             
             # Input files
-            neighborhood_csv = os.path.join(self.subdirs['neighborhoods'], "txt_files", "combined_cumulative.txt")
-            psi_id_file = os.path.join(self.subdirs['psi_results'], f"{os.path.basename(self.output_dir)}_Psi_blast_ids.txt")
+            filter_file = os.path.join(self.subdirs['psi_results'], 
+                                    f"{os.path.basename(self.output_dir)}_Psi_blast_ids.txt")
+            output_base = os.path.join(self.sequence_analysis_dir, 
+                                    f"{os.path.basename(self.output_dir)}_neighborhood_analysis")
             
-            # Output files
-            fasta_file = os.path.join(self.domain_analysis_dir, 'neighborhood_sequences.fasta')
-            output_tblout = os.path.join(self.domain_analysis_dir, 'hmmscan_results.tblout')
-            output_summary = os.path.join(self.domain_analysis_dir, "domain_summary.txt")
-            output_cumulative = os.path.join(self.domain_analysis_dir, "cumulative_summary.txt")
+            # Read filter file and append .1 to each ID
+            with open(filter_file, 'r') as f:
+                filter_ids = {line.strip() + ".1" for line in f if line.strip()}
+            self.logger.log(f"Loaded {len(filter_ids)} protein IDs from filter file", "info")
             
-            # Step 1: Extract protein IDs from neighborhood results
-            protein_accessions = self._extract_neighborhood_proteins(neighborhood_csv)
+            # Process all CSV files to find matching proteins
+            results, stats = self._process_csv_files(self.csv_dir, filter_ids)
             
-            if not protein_accessions:
-                raise ValueError("No protein accessions found in neighborhood results")
+            # Print statistics
+            self.logger.log("\n=== Processing Statistics ===", "info")
+            self.logger.log(f"Total CSV files found: {stats['total_files']}", "info")
+            self.logger.log(f"Successfully processed: {stats['processed']}", "info")
+            self.logger.log("Skipped files:", "info")
+            self.logger.log(f"  - Wrong name format: {stats['skipped']['name_format']}", "info")
+            self.logger.log(f"  - Missing 'Protein ID' column: {stats['skipped']['no_protein_column']}", "info")
+            self.logger.log(f"  - Empty files: {stats['skipped']['empty_file']}", "info")
+            self.logger.log(f"  - Rows with None values: {stats['skipped']['none_values']}", "info")
+            self.logger.log(f"  - Other errors: {stats['skipped']['other_errors']}", "info")
+            self.logger.log(f"Duplicate relationships removed: {stats['duplicates_removed']}", "info")
+            self.logger.log(f"Total unique matches found: {sum(len(matches) for matches in results.values())}", "info")
             
-            # Step 2: Fetch sequences for these accessions
-            self._fetch_sequences(protein_accessions, fasta_file)
+            # Save detailed results
+            detailed_csv = f"{output_base}_detailed.csv"
+            with open(detailed_csv, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Source File', 'Main Protein', 'Found Protein', 'Position', 'Product'])
+                
+                for filename, matches in results.items():
+                    for match in matches:
+                        writer.writerow([
+                            filename,
+                            match['main_protein'],
+                            match['found_protein'],
+                            match['position'],
+                            match['product']
+                        ])
+            self.logger.log(f"Detailed CSV saved to {detailed_csv}", "info")
             
-            # Step 3: Run domain analysis on neighborhood sequences
-            run_hmmscan(fasta_file, output_tblout, self.args.database_hmm, self.logger)
-            domain_hits = parse_hmmscan_output(output_tblout, self.logger)
+            # Step 1: Neighborhood-based clustering
+            neighborhood_clusters = self._find_protein_clusters_from_neighbors(results)
+            neighborhood_cluster_csv = f"{output_base}_neighborhood_clusters.csv"
+            with open(neighborhood_cluster_csv, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Cluster ID', 'Protein Members'])
+                for i, cluster in enumerate(neighborhood_clusters, 1):
+                    writer.writerow([f"Cluster_{i}", ', '.join(sorted(cluster))])
+            self.logger.log(f"Neighborhood-based clusters saved to {neighborhood_cluster_csv}", "info")
             
-            # Generate outputs
-            write_domain_hits(domain_hits, output_summary, self.logger)
-            summarize_results(output_summary, output_cumulative, fasta_file, self.logger)
-            
-            self.logger.log("Rosetta Stone analysis completed", "info")
+            # Step 2: Sequence-based clustering on neighborhood results
+            if neighborhood_clusters:
+                # Get all unique protein IDs from neighborhood clusters
+                all_protein_ids = set()
+                for cluster in neighborhood_clusters:
+                    all_protein_ids.update(cluster)
+                
+                # Create temporary file with protein IDs
+                protein_ids_file = f"{output_base}_protein_ids.txt"
+                with open(protein_ids_file, 'w') as f:
+                    f.write("\n".join(all_protein_ids))
+                
+                # Run sequence clustering using existing infrastructure
+                sequence_cluster_csv = f"{output_base}_sequence_clusters.csv"
+                self._cluster_proteins(
+                    label='neighborhood',
+                    protein_ids_file=protein_ids_file,
+                    output_file=sequence_cluster_csv
+                )
+                
+                # Clean up temporary file
+                os.remove(protein_ids_file)
+            else:
+                self.logger.warning("No proteins found for sequence clustering")
+                
+            self.logger.log("Neighborhood CSV analysis completed", "info")
             
         except Exception as e:
-            self.logger.log(f"Rosetta Stone analysis failed: {str(e)}", "error")
+            self.logger.log(f"Neighborhood CSV analysis failed: {str(e)}", "error")
             raise
 
-    def _compare_hmm_accessions(self):
-        """Compare HMM accessions between PSI and neighborhood results and create a proper CSV"""
-        try:
-            self.logger.log("Comparing HMM accessions between PSI and neighborhood results", "info")
-            
-            # Input files
-            psi_summary = os.path.join(self.subdirs['domains'], f"{os.path.basename(self.output_dir)}_summary.txt")
-            neigh_summary = os.path.join(self.domain_analysis_dir, "domain_summary.txt")
-            
-            # Output file
-            output_file = os.path.join(self.common_hmm_dir, 'common_hmm_accessions.csv')
-            
-            # Parse both summary files properly
-            psi_data = self._parse_domain_summary(psi_summary)
-            neigh_data = self._parse_domain_summary(neigh_summary)
-            
-            # Find common HMM accessions
-            common_hmms = set(psi_data.keys()) & set(neigh_data.keys())
-            
-            if not common_hmms:
-                self.logger.log("No common HMM accessions found between PSI and neighborhood results", "warning")
-                return False
-            
-            # Prepare the CSV data
-            csv_data = []
-            for hmm_acc in common_hmms:
-                # Get counts and descriptions
-                psi_count = psi_data[hmm_acc]['count']
-                neigh_count = neigh_data[hmm_acc]['count']
-                
-                # Use PSI description if available, otherwise neighborhood description
-                description = psi_data[hmm_acc].get('description', 
-                                                neigh_data[hmm_acc].get('description', 'Unknown'))
-                
-                csv_data.append({
-                    'Accession': hmm_acc,
-                    'Description': description,
-                    'Homolog_proteins': psi_count,
-                    'Neighbour_proteins': neigh_count
-                })
-            
-            # Sort by total occurrences (descending)
-            csv_data.sort(key=lambda x: -(x['Homolog_proteins'] + x['Neighbour_proteins']))
-            
-            # Write to CSV
-            with open(output_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['Accession', 'Description', 'Homolog_proteins', 'Neighbour_proteins'])
-                writer.writeheader()
-                writer.writerows(csv_data)
-            
-            self.logger.log(f"Saved {len(csv_data)} common HMM accessions to {output_file}", "info")
-            return True
-            
-        except Exception as e:
-            self.logger.log(f"Error comparing HMM accessions: {str(e)}", "error")
-            raise
-
-    def _parse_domain_summary(self, summary_file):
-        """Parse domain summary file into a structured format"""
-        hmm_data = {}
+    def _find_protein_clusters_from_neighbors(self, results):
+        """Find clusters of proteins that are neighbors of each other"""
+        # Build adjacency list
+        graph = defaultdict(set)
+        for file_matches in results.values():
+            for match in file_matches:
+                main = match['main_protein']
+                found = match['found_protein']
+                graph[main].add(found)
+                graph[found].add(main)
         
-        try:
-            with open(summary_file, 'r') as f:
-                # Skip header line
-                next(f)
-                
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) >= 8:
-                        target_name = parts[0].strip()
-                        accession = parts[1].strip().split('.')[0]  # Remove version number
-                        query_name = parts[2].strip()
-                        description = parts[7].strip()
-                        
-                        if accession not in hmm_data:
-                            hmm_data[accession] = {
-                                'description': description,
-                                'count': 0,
-                                'proteins': set()
-                            }
-                        
-                        # Add the protein ID (remove version if present)
-                        protein_id = query_name.split('.')[0]
-                        if protein_id not in hmm_data[accession]['proteins']:
-                            hmm_data[accession]['proteins'].add(protein_id)
-                            hmm_data[accession]['count'] += 1
-                        
-        except Exception as e:
-            self.logger.log(f"Error parsing domain summary file {summary_file}: {str(e)}", "error")
-            raise
+        # Find connected components
+        visited = set()
+        clusters = []
         
-        return hmm_data
+        for protein in graph:
+            if protein not in visited:
+                cluster = set()
+                queue = deque([protein])
+                while queue:
+                    current = queue.popleft()
+                    if current not in visited:
+                        visited.add(current)
+                        cluster.add(current)
+                        for neighbor in graph[current]:
+                            if neighbor not in visited:
+                                queue.append(neighbor)
+                if cluster:
+                    clusters.append(cluster)
+        
+        return clusters
 
-    def _parse_hmm_summary(self, summary_file):
-        """Parse HMM summary file into a dictionary {accession: {'description': str, 'count': int}}"""
-        data = {}
-        with open(summary_file, 'r') as f:
-            next(f)  # Skip header
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) >= 4:
-                    accession = parts[1].split('.')[0]  # Remove version number
-                    description = parts[-1]  # Description is last column
-                    count = 1  # Each line represents one occurrence
+    def _process_csv_files(self, directory, filter_ids):
+        """Process all CSV files in directory and find matching protein IDs from filter list"""
+        results = defaultdict(list)
+        stats = {
+            'total_files': 0,
+            'processed': 0,
+            'skipped': {
+                'name_format': 0,
+                'no_protein_column': 0,
+                'empty_file': 0,
+                'other_errors': 0,
+                'none_values': 0
+            },
+            'duplicates_removed': 0
+        }
+        
+        for filename in os.listdir(directory):
+            if not filename.endswith('.csv'):
+                continue
+                
+            stats['total_files'] += 1
+            main_protein = self._extract_protein_id_from_filename(filename)
+            if not main_protein:
+                stats['skipped']['name_format'] += 1
+                continue
+                
+            main_protein_with_suffix = f"{main_protein}.1"
+            csv_path = os.path.join(directory, filename)
+            
+            try:
+                with open(csv_path, 'r') as csvfile:
+                    # First try reading as tab-delimited
+                    try:
+                        dialect = csv.Sniffer().sniff(csvfile.read(1024))
+                        csvfile.seek(0)
+                        reader = csv.DictReader(csvfile, dialect=dialect)
+                    except:
+                        # Fall back to tab delimiter if sniffer fails
+                        csvfile.seek(0)
+                        reader = csv.DictReader(csvfile, delimiter='\t')
                     
-                    if accession in data:
-                        data[accession]['count'] += 1
-                    else:
-                        data[accession] = {
-                            'description': description,
-                            'count': count
-                        }
-        return data
+                    # Check if file is empty
+                    if not reader.fieldnames:
+                        stats['skipped']['empty_file'] += 1
+                        continue
+                        
+                    # Case-insensitive check for Protein ID column
+                    fieldnames_lower = [f.lower() for f in reader.fieldnames]
+                    if 'protein id' not in fieldnames_lower:
+                        stats['skipped']['no_protein_column'] += 1
+                        continue
+                    
+                    # Get the actual case of the Protein ID column
+                    protein_id_col = reader.fieldnames[fieldnames_lower.index('protein id')]
+                    
+                    # Track unique relationships to avoid duplicates
+                    seen_relationships = set()
+                    
+                    for row in reader:
+                        try:
+                            protein_id = row.get(protein_id_col, '')
+                            if protein_id is None:
+                                stats['skipped']['none_values'] += 1
+                                continue
+                                
+                            protein_id = str(protein_id).strip()
+                            if not protein_id or protein_id == 'Unknown':
+                                continue
+                                
+                            if protein_id in filter_ids and protein_id != main_protein_with_suffix:
+                                position = str(row.get('Position', 'N/A')).strip()
+                                product = str(row.get('Product', 'N/A')).strip()
+                                
+                                # Create unique key for this relationship
+                                relationship_key = (main_protein_with_suffix, protein_id, product)
 
-    def _run_common_hmm_blast(self):
+                                if relationship_key not in seen_relationships:
+                                    seen_relationships.add(relationship_key)
+                                    results[filename].append({
+                                        'main_protein': main_protein_with_suffix,
+                                        'found_protein': protein_id,
+                                        'position': position,
+                                        'product': product
+                                    })
+                                else:
+                                    stats['duplicates_removed'] += 1
+                                    
+                        except Exception as row_error:
+                            stats['skipped']['none_values'] += 1
+                            continue
+                    
+                    stats['processed'] += 1
+                    
+            except Exception as e:
+                stats['skipped']['other_errors'] += 1
+                continue
+        
+        return results, stats
+
+    def _extract_protein_id_from_filename(self, filename):
+        """Extract protein ID from CSV filename (e.g., WP_003557223_neighbors.csv -> WP_003557223)"""
+        match = re.match(r'^(WP_\d+|XP_\d+|NP_\d+|YP_\d+|AP_\d+|GP_\d+)', filename)
+        return match.group(1) if match else None
+
+    def _find_protein_clusters(self, matches):
+        """Find clusters of proteins that are neighbors of each other"""
+        # Build adjacency list
+        graph = defaultdict(set)
+        for file_matches in matches.values():
+            for match in file_matches:
+                main = match['main_protein']
+                found = match['found_protein']
+                graph[main].add(found)
+                graph[found].add(main)
+        
+        # Find connected components
+        visited = set()
+        clusters = []
+        
+        for protein in graph:
+            if protein not in visited:
+                cluster = set()
+                queue = deque([protein])
+                while queue:
+                    current = queue.popleft()
+                    if current not in visited:
+                        visited.add(current)
+                        cluster.add(current)
+                        for neighbor in graph[current]:
+                            if neighbor not in visited:
+                                queue.append(neighbor)
+                if cluster:
+                    clusters.append(cluster)
+        
+        return clusters
+
+    def _save_neighborhood_results(self, results, base_output_name):
+        """Save neighborhood analysis results in CSV formats"""
+        # Save detailed matches as CSV
+        detailed_csv = f"{base_output_name}_detailed.csv"
+        with open(detailed_csv, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Source File', 'Main Protein', 'Found Protein', 'Position', 'Product'])
+            
+            for filename, matches in results.items():
+                for match in matches:
+                    writer.writerow([
+                        filename,
+                        match['main_protein'],
+                        match['found_protein'],
+                        match['position'],
+                        match['product']
+                    ])
+        self.logger.log(f"Detailed CSV saved to {detailed_csv}", "info")
+        
+        # Find and save protein clusters
+        clusters = self._find_protein_clusters(results)
+        cluster_csv = f"{base_output_name}_clusters.csv"
+        with open(cluster_csv, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Cluster ID', 'Protein Members'])
+            
+            for i, cluster in enumerate(clusters, 1):
+                writer.writerow([f"Cluster_{i}", ', '.join(sorted(cluster))])
+        self.logger.log(f"Protein clusters CSV saved to {cluster_csv}", "info")
+
+    def _run_sequence_homology_analysis(self):
+        """Run sequence homology analysis (equivalent to Sequence_homology_data_analysis.py)"""
         try:
-            self.logger.log("Running BLAST analysis on common HMM proteins", "info")
+            self.logger.log("Running sequence homology analysis", "info")
             
             # Input files
-            common_csv = os.path.join(self.common_hmm_dir, 'common_hmm_accessions.csv')
-            psi_summary = os.path.join(self.subdirs['domains'], f"{os.path.basename(self.output_dir)}_summary.txt")
-            neigh_summary = os.path.join(self.domain_analysis_dir, "domain_summary.txt")
+            input_file = os.path.join(self.subdirs['neighborhoods'], "txt_files", "combined_cumulative.txt")
+            filter_file = os.path.join(self.subdirs['psi_results'], f"{os.path.basename(self.output_dir)}_Psi_blast_ids.txt")
+            query_fasta = os.path.join(self.subdirs['domains'], f"{os.path.basename(self.output_dir)}_cleaned.fasta")
+            csv_directory = os.path.join(self.subdirs['neighborhoods'], "csv_files")
             
             # Output files
-            psi_fasta = os.path.join(self.common_hmm_dir, "psi_proteins.fasta")
-            neigh_fasta = os.path.join(self.common_hmm_dir, "neighbour_proteins.fasta")
-            blast_output = os.path.join(self.common_hmm_dir, "blast_results.txt")
-            high_id_output = os.path.join(self.common_hmm_dir, 'filtered_pairs.tsv')
-            cluster_file = os.path.join(self.common_hmm_dir, 'protein_clusters.csv')
+            output_fasta = os.path.join(self.sequence_analysis_dir, 'neighborhood_sequences.fasta')
+            blast_output = os.path.join(self.sequence_analysis_dir, 'blast_results.txt')
+            filtered_output = os.path.join(self.sequence_analysis_dir, 'filtered_pairs.tsv')
+            final_results = os.path.join(self.sequence_analysis_dir, 'final_results.csv')
             
-            # Step 1: Load common HMMs
-            common_hmms = self._load_common_hmms(common_csv)
-            if not common_hmms:
-                self.logger.log("No common HMM accessions found - skipping BLAST analysis", "warning")
-                return True
+            # Step 1: Read and filter protein IDs
+            protein_ids = self._read_protein_ids(input_file, filter_file)
+            self.logger.log(f"Found {len(protein_ids)} protein IDs for analysis", "info")
             
-            # Step 2: Extract protein accessions with proper validation
-            psi_prots = self._extract_proteins_from_domains(psi_summary, common_hmms)
-            neigh_prots = self._extract_proteins_from_domains(neigh_summary, common_hmms)
+            # Step 2: Fetch sequences and create BLAST database
+            self._fetch_sequences(protein_ids, output_fasta)
             
-            self.logger.log(f"Found {len(psi_prots)} PSI proteins and {len(neigh_prots)} neighbor proteins", "info")
+            db_name = os.path.join(self.sequence_analysis_dir, 'blast_db')
+            self._run_makeblastdb(output_fasta, db_name)
             
-            if not psi_prots or not neigh_prots:
-                self.logger.log("Insufficient proteins for BLAST analysis - skipping", "warning")
-                return True
+            # Step 3: Run BLASTP with query FASTA
+            self._run_blastp(query_fasta, db_name, blast_output)
             
-            # Step 3: Download sequences with validation
-            if not self._fetch_sequences_with_validation(psi_prots, psi_fasta, "PSI"):
-                return True
-            if not self._fetch_sequences_with_validation(neigh_prots, neigh_fasta, "neighbor"):
-                return True
+            # Step 4: Filter high identity pairs
+            self._filter_high_identity_pairs(blast_output, filtered_output, self.args.identity_threshold)
             
-            # Step 4: Create BLAST database and run BLASTP
-            db_name = os.path.join(self.common_hmm_dir, "neighbour_db")
-            self._make_blast_db(neigh_fasta, db_name)
-            self._run_blastp(psi_fasta, db_name, blast_output)
+            # Step 5: Process high identity matches with neighborhood CSV files
+            self._process_high_identity_matches(filtered_output, csv_directory, final_results)
             
-            # Step 5: Filter and cluster results
-            self._filter_high_identity_pairs(blast_output, high_id_output, self.args.identity_threshold)
-            self._find_protein_clusters(high_id_output, cluster_file, self.args.identity_threshold)
-            
-            # Clean up
-            self._delete_blastdb_files(db_name)
-            
-            self.logger.log("Common HMM BLAST analysis completed", "info")
-            return True
+            self.logger.log("Sequence homology analysis completed", "info")
             
         except Exception as e:
-            self.logger.log(f"Common HMM BLAST analysis failed: {str(e)}", "error")
+            self.logger.log(f"Sequence homology analysis failed: {str(e)}", "error")
             raise
 
-    def _extract_proteins_from_domains(self, summary_file, common_hmms):
-        """Extract protein IDs from domain summary file that match common HMMs"""
-        proteins = set()
-        try:
-            with open(summary_file, 'r') as f:
-                next(f)  # Skip header
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) >= 3:
-                        hmm_acc = parts[1].split('.')[0]  # Get base accession without version
-                        protein_id = parts[2].strip()
-                        if hmm_acc in common_hmms and protein_id and protein_id != "Unknown":
-                            proteins.add(protein_id.split('.')[0])  # Store base protein ID
-        except Exception as e:
-            self.logger.log(f"Error extracting proteins from {summary_file}: {str(e)}", "error")
-            raise
-        return list(proteins)
-
-    def _fetch_sequences_with_validation(self, protein_ids, output_fasta, protein_type):
-        """Fetch sequences with validation of the input IDs"""
-        if not protein_ids:
-            self.logger.log(f"No {protein_type} protein IDs to fetch", "warning")
-            return False
+    def _run_clustering_analysis(self):
+        """Run clustering analysis on the sequence homology results
         
+        Processes the final_results.csv from sequence homology analysis to:
+        1. Extract unique protein IDs for neighbors and genomes
+        2. Fetch their sequences from NCBI
+        3. Perform all-vs-all BLAST comparisons
+        4. Cluster proteins based on sequence similarity
+        
+        Outputs:
+        - neighbors_clusters.csv: Clusters of neighbor proteins
+        - genomes_clusters.csv: Clusters of genome proteins
+        """
         try:
-            # First check if we have valid protein IDs
-            valid_ids = [pid for pid in protein_ids if pid and len(pid) > 3]  # Basic validation
-            if not valid_ids:
-                self.logger.log(f"No valid {protein_type} protein IDs to fetch", "warning")
-                return False
+            self.logger.log("Starting clustering analysis", "info")
             
-            # Then fetch the sequences
-            self._fetch_sequences(valid_ids, output_fasta)
+            # 1. Input Validation
+            input_csv = os.path.join(self.sequence_analysis_dir, 'final_results.csv')
+            if not os.path.exists(input_csv):
+                raise FileNotFoundError(f"Input file not found: {input_csv}")
             
-            # Verify the output file was created and has content
-            if not os.path.exists(output_fasta) or os.path.getsize(output_fasta) == 0:
-                self.logger.log(f"Failed to fetch {protein_type} protein sequences - empty output file", "error")
-                return False
-                
-            return True
-        except Exception as e:
-            self.logger.log(f"Error fetching {protein_type} protein sequences: {str(e)}", "error")
-            return False
-
-    def _analyze_matches(self):
-        """Run the equivalent of matches.py"""
-        try:
-            self.logger.log("Analyzing matches between PSI and neighborhood proteins", "info")
+            # 2. Read and Process IDs
+            self.logger.log("Extracting unique protein IDs from results", "debug")
+            neighbor_ids, genome_ids = self._read_unique_ids(input_csv)
             
-            # Input files
-            csv_directory = os.path.join(self.subdirs['neighborhoods'], "csv_files")
-            blast_results = os.path.join(self.common_hmm_dir, "blast_results.txt")
-            psi_fasta = os.path.join(self.common_hmm_dir, "psi_proteins.fasta")
-            neigh_fasta = os.path.join(self.common_hmm_dir, "neighbour_proteins.fasta")
-            psi_domains_path = os.path.join(self.subdirs['domains'], f"{os.path.basename(self.output_dir)}_summary.txt")
-            neigh_domains_path = os.path.join(self.domain_analysis_dir, "domain_summary.txt")
+            # Convert sets to lists for processing
+            neighbor_ids = sorted(list(neighbor_ids))  # Sorting ensures consistent ordering
+            genome_ids = sorted(list(genome_ids))
             
-            # Get all data
-            all_pairs = self._extract_all_pairs(blast_results)
-            self.logger.log(f"Found {len(all_pairs)} protein pairs total", "info")
-            
-            fasta1_ids = self._extract_ids_from_fasta(neigh_fasta)
-            fasta2_ids = self._extract_ids_from_fasta(psi_fasta)
-            
-            # Load domain information
-            neighbour_domains = self._parse_domain_summary(neigh_domains_path)
-            psi_domains = self._parse_domain_summary(psi_domains_path)
-            
-            # Build genome ID mapping
-            protein_to_genome = self._build_genome_id_map(csv_directory)
-            
-            # Categorize matches by identity ranges
-            categories = self._categorize_matches(
-                all_pairs, fasta1_ids, fasta2_ids, 
-                neighbour_domains, psi_domains, protein_to_genome
+            self.logger.log(
+                f"Found {len(neighbor_ids)} neighbor proteins and {len(genome_ids)} genome proteins for clustering", 
+                "info"
             )
             
-            # Write separate CSV files for each category
-            for cat_name, cat_data in categories.items():
-                self._write_category_csv(cat_name, cat_data['matches'])
+            # 3. Validate we have proteins to process
+            if not neighbor_ids and not genome_ids:
+                self.logger.warning("No proteins found for clustering - skipping")
+                return
             
-            self.logger.log("Match analysis completed", "info")
+            # 4. Create output directory for clusters
+            os.makedirs(self.clusters_dir, exist_ok=True)
+            
+            # 5. Process Neighbor Proteins
+            if neighbor_ids:
+                self.logger.log("Processing neighbor protein clusters", "info")
+                neighbor_fasta = os.path.join(self.clusters_dir, 'neighbors.fasta')
+                
+                # 5a. Fetch sequences
+                self._fetch_sequences(neighbor_ids, neighbor_fasta)
+                
+                # 5b. Cluster
+                self._cluster_proteins(
+                    label='neighbors',
+                    fasta_file=neighbor_fasta
+                )
+            
+            # 6. Process Genome Proteins
+            if genome_ids:
+                self.logger.log("Processing genome protein clusters", "info")
+                genome_fasta = os.path.join(self.clusters_dir, 'genomes.fasta')
+                
+                # 6a. Fetch sequences
+                self._fetch_sequences(genome_ids, genome_fasta)
+                
+                # 6b. Cluster
+                self._cluster_proteins(
+                    label='genomes', 
+                    fasta_file=genome_fasta
+                )
+            
+            self.logger.log("Clustering analysis completed successfully", "info")
             
         except Exception as e:
-            self.logger.log(f"Match analysis failed: {str(e)}", "error")
+            self.logger.log(f"Clustering analysis failed: {str(e)}", "error")
             raise
 
-    # Helper methods for _run_rosetta_stone_analysis
-    def _extract_neighborhood_proteins(self, neighborhood_file):
-        """Extract unique protein accessions from neighborhood results"""
-        protein_accessions = set()
+    def _cluster_proteins(self, label, protein_ids_file=None, fasta_file=None, output_file=None):
+        """Extended version of protein clustering that can handle both file types"""
+        try:
+            if protein_ids_file and not fasta_file:
+                # Read protein IDs from file
+                with open(protein_ids_file, 'r') as f:
+                    protein_ids = [line.strip() for line in f if line.strip()]
+                
+                # Create temporary FASTA file
+                fasta_file = os.path.join(self.clusters_dir, f"{label}_proteins.fasta")
+                self._fetch_sequences(protein_ids, fasta_file)
+            
+            # Rest of the existing clustering logic
+            db_name = os.path.join(self.clusters_dir, f"{label}_db")
+            blast_out = os.path.join(self.clusters_dir, f"{label}_blast.tsv")
+            filtered_out = os.path.join(self.clusters_dir, f"{label}_filtered.tsv")
+            
+            if not output_file:
+                output_file = os.path.join(self.clusters_dir, f"{label}_clusters.csv")
+            
+            self._run_makeblastdb(fasta_file, db_name)
+            self._run_blastp(fasta_file, db_name, blast_out)
+            self._filter_high_identity_pairs(blast_out, filtered_out, self.args.identity_threshold)
+            self._find_protein_clusters(filtered_out, output_file)
+            self._delete_blastdb_files(db_name)
+            
+        except Exception as e:
+            self.logger.log(f"Error clustering {label} proteins: {str(e)}", "error")
+            raise
+
+
+    # Helper methods for sequence homology analysis
+    def _read_protein_ids(self, filepath, filter_file=None):
+        """Extract Protein IDs from the input file, optionally filtering against another file."""
+        protein_ids = set()
+        filter_ids = set()
         
-        with open(neighborhood_file, 'r') as f:
+        if filter_file:
+            self.logger.log("Reading filter file...", "info")
+            with open(filter_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        # Store filter IDs without .1 suffix for consistent comparison
+                        filter_ids.add(line.replace('.1', ''))
+            self.logger.log(f"Found {len(filter_ids)} protein IDs in filter file", "info")
+        
+        total_ids = 0
+        filtered_out = 0
+        with open(filepath, 'r') as file:
+            next(file)  # Skip header
+            for line in file:
+                if line.strip() == "":
+                    continue
+                parts = line.strip().split('\t')
+                if parts:
+                    protein_id = parts[0]
+                    total_ids += 1
+                    # Remove .1 suffix for comparison if present
+                    base_id = protein_id.replace('.1', '')
+                    
+                    if not filter_ids or base_id not in filter_ids:
+                        protein_ids.add(protein_id)
+                    else:
+                        filtered_out += 1
+        
+        self.logger.log(f"Total IDs in input file: {total_ids}", "info")
+        self.logger.log(f"IDs filtered out: {filtered_out}", "info")
+        self.logger.log(f"IDs remaining after filtering: {len(protein_ids)}", "info")
+        
+        if filter_ids and filtered_out == 0:
+            self.logger.warning("No IDs were filtered out - check filter file format")
+        elif filter_ids and len(protein_ids) == 0:
+            self.logger.warning("All IDs were filtered out - check filter file format")
+        
+        return list(protein_ids)
+
+    def _process_high_identity_matches(self, filtered_output, csv_directory, final_results):
+        """Process high identity matches to find corresponding genome proteins"""
+        high_identity_pairs = self._read_high_identity_pairs(filtered_output)
+        neighbor_proteins = self._build_neighbor_protein_set(csv_directory)
+        
+        psi_to_neighbors = defaultdict(list)
+        for qseqid, sseqid, pident in high_identity_pairs:
+            if sseqid in neighbor_proteins:
+                psi_to_neighbors[qseqid].append((sseqid, pident))
+        
+        final_results_data = []
+        
+        for psi_protein, neighbors in psi_to_neighbors.items():
+            for neighbor_protein, pident in neighbors:
+                genome_protein = self._find_genome_protein(neighbor_protein, csv_directory)
+                if not genome_protein:
+                    continue
+                
+                # Run verification BLAST
+                genome_match = self._verify_genome_match(psi_protein, genome_protein)
+                if genome_match:
+                    final_results_data.append({
+                        'psi_protein': psi_protein,
+                        'neighbor_protein': neighbor_protein,
+                        'neighbor_pident': pident,
+                        'genome_protein': genome_protein,
+                        'genome_pident': genome_match
+                    })
+        
+        # Write final results
+        with open(final_results, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['psi_protein', 'neighbor_protein', 'neighbor_pident', 
+                                                 'genome_protein', 'genome_pident'])
+            writer.writeheader()
+            writer.writerows(final_results_data)
+        
+        self.logger.log(f"Saved final results to {final_results}", "info")
+
+    def _read_high_identity_pairs(self, filtered_output):
+        """Read high identity pairs from filtered output file"""
+        pairs = []
+        with open(filtered_output, 'r') as f:
             reader = csv.reader(f, delimiter='\t')
             next(reader)  # Skip header
             for row in reader:
-                if len(row) > 0:
-                    protein_id = row[0].strip()
-                    if protein_id and protein_id != "Unknown":
-                        # Remove version number if present (e.g., WP_123456789.1)
-                        base_id = protein_id.split('.')[0]
-                        protein_accessions.add(base_id)
-        
-        self.logger.log(f"Extracted {len(protein_accessions)} protein accessions from neighborhood results", "info")
-        return list(protein_accessions)
+                if len(row) >= 3:
+                    pairs.append((row[0], row[1], float(row[2])))
+        return pairs
 
-    # Helper methods for _compare_hmm_accessions
-    def _load_accessions_with_counts(self, filepath):
-        """Loads a file and returns a dict: {accession: (description, count)}"""
-        accession_data = {}
-        with open(filepath, 'r') as f:
-            for line in f:
-                if line.startswith("Target Name") or not line.strip():
-                    continue
-                parts = line.strip().split('\t')
-                if len(parts) >= 4:
-                    accession = parts[1].strip()
-                    description = parts[2].strip()
-                    try:
-                        count = int(parts[3].strip())
-                    except ValueError:
-                        count = 0
-                    accession_data[accession] = (description, count)
-        return accession_data
+    def _build_neighbor_protein_set(self, csv_directory):
+        """Build set of all protein IDs mentioned in neighborhood CSV files"""
+        neighbor_proteins = set()
+        for csv_file in os.listdir(csv_directory):
+            if csv_file.endswith('.csv'):
+                with open(os.path.join(csv_directory, csv_file), 'r') as f:
+                    reader = csv.reader(f)
+                    next(reader)  # Skip header
+                    for row in reader:
+                        if len(row) >= 6:
+                            protein_id = row[5].strip()
+                            if protein_id != "Unknown":
+                                neighbor_proteins.add(protein_id)
+        return neighbor_proteins
 
-    # Helper methods for _run_common_hmm_blast
-    def _load_common_hmms(self, csv_path):
-        common_hmms = set()
-        with open(csv_path) as f:
-            reader = csv.DictReader(f)
+    def _find_genome_protein(self, neighbor_protein, csv_directory):
+        """Find genome protein ID from CSV filename that contains the neighbor protein"""
+        for csv_file in os.listdir(csv_directory):
+            if csv_file.endswith('.csv'):
+                if neighbor_protein in open(os.path.join(csv_directory, csv_file)).read():
+                    match = re.match(r'^(WP_\d+)', csv_file)
+                    if match:
+                        return f"{match.group(1)}.1"
+        return None
+
+    def _verify_genome_match(self, psi_protein, genome_protein):
+        """Verify match between PSI protein and genome protein with BLAST"""
+        try:
+            # Create temporary files
+            temp_dir = os.path.join(self.sequence_analysis_dir, "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            psi_fasta = os.path.join(temp_dir, f"{psi_protein}.fasta")
+            genome_fasta = os.path.join(temp_dir, f"{genome_protein}.fasta")
+            db_name = os.path.join(temp_dir, f"{genome_protein}_db")
+            blast_output = os.path.join(temp_dir, f"{psi_protein}_vs_{genome_protein}_blast.txt")
+            
+            # Fetch sequences and run BLAST
+            self._fetch_sequences([psi_protein], psi_fasta)
+            self._fetch_sequences([genome_protein], genome_fasta)
+            self._run_makeblastdb(genome_fasta, db_name)
+            self._run_blastp(psi_fasta, db_name, blast_output)
+            
+            # Check for high identity matches
+            with open(blast_output, 'r') as f:
+                for line in f:
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 3:
+                        try:
+                            return float(parts[2])
+                        except ValueError:
+                            continue
+            
+            return None
+            
+        finally:
+            # Clean up temporary files
+            for temp_file in [psi_fasta, genome_fasta, blast_output]:
+                try:
+                    os.remove(temp_file)
+                except FileNotFoundError:
+                    pass
+            try:
+                self._delete_blastdb_files(db_name)
+            except:
+                pass
+
+    # Helper methods for clustering analysis
+    def _read_unique_ids(self, input_csv):
+        """Read unique neighbor and genome IDs from input CSV"""
+        neighbor_ids = set()
+        genome_ids = set()
+        with open(input_csv, 'r') as file:
+            reader = csv.DictReader(file)
             for row in reader:
-                common_hmms.add(row["Accession"].strip())
-        return common_hmms
+                neighbor_ids.add(row['neighbor_protein'].strip())
+                genome_ids.add(row['genome_protein'].strip())
+        return neighbor_ids, genome_ids
 
-    def _extract_accessions_from_summary(self, summary_file, common_hmms):
-        accessions = set()
-        with open(summary_file) as f:
-            next(f)  # Skip header
-            for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) < 3:
-                    continue
-                hmm_accession = parts[1].strip()
-                protein_accession = parts[2].strip()
-                if hmm_accession in common_hmms:
-                    accessions.add(protein_accession.split('.')[0])  # Strip version
-        return accessions
-
-    def _make_blast_db(self, fasta_file, db_name):
-        subprocess.run([
-            "makeblastdb", "-in", fasta_file, 
-            "-dbtype", "prot", "-out", db_name
-        ], check=True)
-
-    def _run_blastp(self, query_fasta, db_name, output_file):
-        subprocess.run([
-            "blastp", "-query", query_fasta, "-db", db_name,
-            "-out", output_file, "-outfmt", "6 qseqid sseqid pident",
-            "-evalue", "1e-5", "-num_threads", str(self.args.num_threads)
-        ], check=True)
-
-    def _filter_high_identity_pairs(self, input_csv, output_csv, threshold):
-        best_matches = defaultdict(float)
-        with open(input_csv, 'r') as infile:
-            reader = csv.DictReader(infile, delimiter='\t', fieldnames=["qseqid", "sseqid", "pident"])
-            for row in reader:
-                qseqid = row['qseqid']
-                sseqid = row['sseqid']
-                pident = float(row['pident'])
-                if qseqid == sseqid:
-                    continue
-                pair = tuple(sorted((qseqid, sseqid)))
-                if pident > best_matches[pair]:
-                    best_matches[pair] = pident
-        
-        with open(output_csv, 'w') as outfile:
-            writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(['Protein1', 'Protein2', 'Percent_Identity'])
-            for (prot1, prot2), pident in best_matches.items():
-                if pident >= threshold:
-                    writer.writerow([prot1, prot2, pident])
-        
-        self.logger.log(f"Filtered high-identity pairs saved to {output_csv}", "info")
-
-    def _find_protein_clusters(self, input_file, output_file, min_identity):
+    def _find_protein_clusters(self, input_file, output_file, min_identity=95):
+        """Group proteins into clusters based on similarity"""
         graph = defaultdict(set)
         with open(input_file, 'r') as f:
             reader = csv.DictReader(f, delimiter='\t')
             for row in reader:
                 if float(row['Percent_Identity']) >= min_identity:
-                    prot1 = row['Protein1']
-                    prot2 = row['Protein2']
-                    graph[prot1].add(prot2)
-                    graph[prot2].add(prot1)
+                    p1, p2 = row['Protein1'], row['Protein2']
+                    graph[p1].add(p2)
+                    graph[p2].add(p1)
         
         visited = set()
         clusters = []
@@ -2080,142 +2041,22 @@ class DataAnalyser:
                         visited.add(current)
                         cluster.add(current)
                         stack.extend(graph[current] - visited)
-                if cluster:
-                    clusters.append(cluster)
+                clusters.append(cluster)
         
-        with open(output_file, 'w', newline='') as f:
+        with open(output_file, 'w') as f:
             writer = csv.writer(f)
             writer.writerow(['ClusterID', 'Proteins'])
             for i, cluster in enumerate(sorted(clusters, key=lambda x: -len(x)), 1):
-                sorted_proteins = sorted(cluster)
-                writer.writerow([f'Cluster_{i}', ', '.join(sorted_proteins)])
+                writer.writerow([f"Cluster_{i}", ", ".join(sorted(cluster))])
         
-        self.logger.log(f"Found {len(clusters)} protein clusters saved to {output_file}", "info")
-
-    def _delete_blastdb_files(self, db_name):
-        extensions = ['.pin', '.phr', '.psq', '.pdb', '.pjs', '.pog', '.pos', '.pto', '.pot', '.ptf']
-        for ext in extensions:
-            file_path = f"{db_name}{ext}"
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                self.logger.log(f"Deleted {file_path}", "debug")
-
-    # Helper methods for _analyze_matches
-    def _extract_all_pairs(self, txt_file):
-        """Extract all protein pairs with their identity scores."""
-        pairs = []
-        with open(txt_file, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) == 3:
-                    pid1, pid2, identity = parts
-                    try:
-                        pairs.append((pid1.strip(), pid2.strip(), float(identity)))
-                    except ValueError:
-                        continue  # Skip invalid float conversion
-        return pairs
-
-    def _extract_ids_from_fasta(self, fasta_file):
-        """Extract all protein IDs from a FASTA file."""
-        return {record.id.strip() for record in SeqIO.parse(fasta_file, 'fasta')}
-
-    def _parse_domain_summary(self, summary_file):
-        """Parse domain summary file into a dictionary {base_protein_id: list_of_domain_names}."""
-        domains = defaultdict(list)
-        with open(summary_file, 'r') as f:
-            next(f)  # Skip header line
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) >= 3:
-                    protein_id = parts[2].strip()
-                    domain_name = parts[0].strip()
-                    base_id = protein_id.split('.')[0]
-                    domains[base_id].append(domain_name)
-        return domains
-
-    def _build_genome_id_map(self, csv_directory):
-        """Build a dictionary mapping protein IDs to genome IDs from CSV files."""
-        protein_to_genome = {}
-        for csv_file in glob.glob(os.path.join(csv_directory, "*.csv")):
-            with open(csv_file, 'r') as f:
-                reader = csv.reader(f)
-                next(reader)  # Skip header
-                for row in reader:
-                    if len(row) >= 6:
-                        genome_id = row[0].strip()
-                        protein_id = row[5].strip()
-                        protein_to_genome[protein_id] = genome_id
-        return protein_to_genome
-
-    def _categorize_matches(self, pairs, fasta1_ids, fasta2_ids, neighbour_domains, psi_domains, protein_to_genome):
-        """Categorize matches into different identity ranges."""
-        categories = {
-            '100_to_80': {'min': 80, 'max': 100, 'matches': []},
-            '80_to_60': {'min': 60, 'max': 80, 'matches': []},
-            '60_to_40': {'min': 40, 'max': 60, 'matches': []},
-            'below_40': {'min': 0, 'max': 40, 'matches': []}
-        }
-        
-        for pid1, pid2, identity in pairs:
-            # Check both possible directions of matching
-            if (pid1 in fasta1_ids and pid2 in fasta2_ids) or (pid1 in fasta2_ids and pid2 in fasta1_ids):
-                # Determine which is the neighbor and which is the PSI protein
-                if pid1 in fasta1_ids:
-                    neighbour = pid1
-                    psi = pid2
-                else:
-                    neighbour = pid2
-                    psi = pid1
-                
-                # Get genome ID from mapping
-                genome_id = protein_to_genome.get(neighbour, "Unknown")
-                
-                match_data = {
-                    'psi_protein': psi,
-                    'neighbour_protein': neighbour,
-                    'percent_identity': identity,
-                    'genome_id': genome_id,
-                    'neighbour_domains': self._format_domains(self._get_domains(neighbour, neighbour_domains)),
-                    'psi_domains': self._format_domains(self._get_domains(psi, psi_domains))
-                }
-                
-                # Categorize the match
-                for cat_name, cat in categories.items():
-                    if cat['min'] < identity <= cat['max']:
-                        cat['matches'].append(match_data)
-                        break
-        
-        return categories
-
-    def _get_domains(self, protein_id, domain_map):
-        """Get domains for a protein ID, handling version numbers."""
-        base_id = protein_id.split('.')[0]
-        return domain_map.get(base_id, [])
-
-    def _format_domains(self, domain_list):
-        """Format list of domains into a semicolon-separated string."""
-        return "; ".join(domain_list) if domain_list else "NA"
-
-    def _write_category_csv(self, category_name, matches):
-        """Write matches for a specific category to CSV."""
-        if not matches:
-            self.logger.log(f"No matches found in category {category_name}", "warning")
-            return
-        
-        output_csv = os.path.join(self.matches_dir, f"matches_{category_name}.csv")
-        fieldnames = ['psi_protein', 'neighbour_protein', 'percent_identity', 
-                     'genome_id', 'neighbour_domains', 'psi_domains']
-        
-        with open(output_csv, 'w', newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(matches)
-        
-        self.logger.log(f"{len(matches)} sequences written to {output_csv}", "info")
+        self.logger.log(f"Found {len(clusters)} clusters in {output_file}", "info")
 
     # Shared helper methods
     def _fetch_sequences(self, protein_ids, output_fasta):
         """Fetch protein sequences from NCBI in batches"""
+        # Ensure we have a list (convert from set if needed)
+        protein_ids = list(protein_ids) if isinstance(protein_ids, set) else protein_ids
+        
         with open(output_fasta, 'w') as fasta_out:
             for i in range(0, len(protein_ids), self.BATCH_SIZE):
                 batch = protein_ids[i:i + self.BATCH_SIZE]
@@ -2239,7 +2080,7 @@ class DataAnalyser:
                         if attempt == max_attempts:
                             self.logger.log(f"Failed batch {i//self.BATCH_SIZE + 1} after {max_attempts} attempts: {e}", "error")
                             raise
-                        self.logger.log(f"Retrying batch {i//self.BATCH_SIZE + 1} (attempt {attempt})", "warning")
+                        self.logger.log(f"Retrying batch {i//self.BATCH_SIZE + 1} (attempt {attempt})...", "warning")
                         time.sleep(5 * attempt)  # Exponential backoff
                         attempt += 1
                 
@@ -2247,20 +2088,145 @@ class DataAnalyser:
         
         return output_fasta
 
+    def _run_makeblastdb(self, fasta_file, db_name):
+        """Run makeblastdb command"""
+        cmd = [
+            'makeblastdb',
+            '-in', fasta_file,
+            '-dbtype', 'prot',
+            '-out', db_name,
+            '-parse_seqids'
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            self.logger.log(f"Created BLAST database: {db_name}", "info")
+        except subprocess.CalledProcessError as e:
+            self.logger.log(f"makeblastdb failed: {e}", "error")
+            raise
+
+    def _run_blastp(self, query_fasta, db_name, output_file):
+
+        """Run blastp command"""
+        cmd = [
+            'blastp',
+            '-query', query_fasta,
+            '-db', db_name,
+            '-out', output_file,
+            '-outfmt', '6 qseqid sseqid pident',
+            '-evalue', '1e-5',
+            '-num_threads', str(self.args.num_threads),
+            '-max_hsps', '1'
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            self.logger.log(f"BLASTP results saved to {output_file}", "info")
+        except subprocess.CalledProcessError as e:
+
+            self.logger.log(f"blastp failed: {e}", "error")
+            raise
+    
+
+    def _filter_high_identity_pairs(self, input_csv, output_csv, threshold):
+        """
+        Filter BLAST results for high identity matches.
+        Returns a set of protein pairs that meet the threshold.
+        """        
+        best_matches = defaultdict(float)
+        with open(input_csv, 'r') as infile:
+            reader = csv.DictReader(infile, delimiter='\t', fieldnames=["qseqid", "sseqid", "pident"])
+            for row in reader:
+                qseqid = row['qseqid']
+                #sseqid = row['sseqid']
+                sseqid = normalize_blast_id(row['sseqid'])
+                pident = float(row['pident'])
+                if qseqid == sseqid:
+                    continue
+                pair = tuple(sorted((qseqid, sseqid)))
+                if pident > best_matches[pair]:
+                    best_matches[pair] = pident
+        
+        with open(output_csv, 'w') as outfile:
+            writer = csv.writer(outfile, delimiter='\t')
+            writer.writerow(['Protein1', 'Protein2', 'Percent_Identity'])
+            for (prot1, prot2), pident in best_matches.items():
+                if pident >= threshold:
+                    writer.writerow([prot1, prot2, pident])
+        
+        self.logger.log(f"Filtered high-identity pairs saved to {output_csv}", "info")
+
+    def _delete_blastdb_files(self, db_name):
+        """Delete BLAST database files"""
+        extensions = ['.pin', '.phr', '.psq', '.pdb', '.pjs', '.pog', '.pos', '.pto', '.pot', '.ptf']
+        for ext in extensions:
+            file_path = f"{db_name}{ext}"
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                self.logger.log(f"Deleted {file_path}", "debug")
+
+    def compress_neighbourhood_files(self, directory):
+        """
+        Compress all files in a directory into single gzip archives per file type
+        """
+        self.logger.log(f"Compressing files in {directory}", "info")
+        
+        # Files to exclude from compression
+        excluded_files = {
+            "combined_cumulative.txt",
+            "grouped_by_description.txt"
+        }
+        
+        # Group files by type
+        file_groups = defaultdict(list)
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file in excluded_files:
+                    continue
+                ext = os.path.splitext(file)[1]
+                file_groups[ext].append(os.path.join(root, file))
+        
+        # Compress each group
+        for ext, files in file_groups.items():
+            if not files:
+                continue
+                
+            # Create a single archive for this file type
+            archive_name = os.path.join(directory, f"all_{ext[1:] if ext else 'files'}.tar.gz")
+            self.logger.log(f"Creating archive {archive_name}", "debug")
+            
+            try:
+                with tarfile.open(archive_name, "w:gz") as tar:
+                    for file in files:
+                        try:
+                            tar.add(file, arcname=os.path.basename(file))
+                            os.remove(file)  # Remove original after adding to archive
+                        except Exception as e:
+                            self.logger.log(f"Error processing {file}: {str(e)}", "warning")
+                            continue
+                self.logger.log(f"Created {archive_name} with {len(files)} files", "info")
+            except Exception as e:
+                self.logger.log(f"Error creating archive {archive_name}: {str(e)}", "error")
+
     def cleanup(self):
         """Clean up temporary files"""
         try:
             # Clean up any temporary BLAST databases
-            db_files = glob.glob(os.path.join(self.common_hmm_dir, 'blast_db*'))
+            db_files = glob.glob(os.path.join(self.sequence_analysis_dir, 'blast_db*'))
             for db_file in db_files:
                 try:
                     os.remove(db_file)
                 except Exception as e:
                     self.logger.log(f"Error removing {db_file}: {str(e)}", "warning")
+            db_name = os.path.join(self.domain_analysis_dir, 'blast_db')
+            delete_blastdb_files(db_name, self.logger)
+
+            # Compress neighborhood files
+            hoods_dir = self.subdirs['neighborhoods']
+            self.compress_neighbourhood_files(os.path.join(hoods_dir, "csv_files"))
+            self.compress_neighbourhood_files(os.path.join(hoods_dir, "txt_files"))
             
             self.logger.log("Cleanup completed", "info")
         except Exception as e:
-            self.logger.log(f"Error during cleanup: {str(e)}", "warning")
+            self.logger.log(f"Error during cleanup: {str(e)}", "warning")          
 
 def main():
     """Main execution function"""
@@ -2273,6 +2239,7 @@ def main():
         print(f"Fatal error: {str(e)}")
         raise
 
+
 if __name__ == "__main__":
     print("""
    ██████╗  ███████╗ ███╗   ██╗ ███████╗ ███████╗ ██╗   ██╗ ███████╗ ███████╗
@@ -2284,4 +2251,6 @@ if __name__ == "__main__":
     """)
     print("GeneFuse - Genomic Neighborhood Analysis Pipeline\n")
     main()
-  
+
+
+
