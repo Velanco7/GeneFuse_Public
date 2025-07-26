@@ -139,7 +139,7 @@ python Complete_Script_V1.2.1.py \
 
 
 ##🤝 Contributions
-This is a personal research tool, but contributions are welcome — particularly from those with experience in:
+This is a personal research tool that was inspired by my time at the Franklin Nobrega Lab during my Master's thesis under the expert guidance of both Franklin L. Nobrega and Yi Wu. Contributions are welcomed — particularly from those with experience in:
 
 - Protein domain analysis
 - Comparative genomics
