@@ -21,7 +21,7 @@
 
 | File | Description |
 |------|-------------|
-| `Complete_Script_V1.2.1.py` | Main script integrating multiple modules for fusion detection |
+| `GeneFuse.py` | Main script integrating multiple modules for fusion detection |
 | `Complete_rosetta.py` | Rosetta-style analysis logic used to identify potential protein fusions |
 | `README.md` | Project overview and setup guide |
 | `requirements.txt` | Python dependencies for running GeneFuse (to be added) |
@@ -88,7 +88,7 @@ RefSeq protein database and Pfam HMM databases are data files that need to be do
 Run Complete_Script_V1.2.1.py with the following arguments:
 
 ```bash
-python Complete_Script_V1.2.1.py \
+python GeneFuse.py \
   input.fasta \
   -u your_email@example.com \
   -db1 path/to/psiblast_db \
